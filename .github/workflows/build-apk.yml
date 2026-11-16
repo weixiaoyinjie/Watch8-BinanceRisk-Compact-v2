@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'Watch8_BinanceRisk_Compact_v2_OneUpload.zip'
       - '.github/workflows/build-apk.yml'
+      - 'Watch8_BinanceRisk_Compact_v2_OneUpload.zip'
+      - 'Watch8_BinanceRisk_Compact_v2_FixedSDK_OneUpload.zip'
       - 'app/**'
       - 'tests/**'
-      - 'settings.gradle'
       - 'build.gradle'
+      - 'settings.gradle'
       - 'gradle.properties'
 
 jobs:
@@ -32,16 +33,52 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK 35
-        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
-
-      - name: Prepare source (ZIP one-upload or extracted project)
+      # Avoid android-actions/setup-android@v3, which fails on some runners
+      # when downloading/updating Android command-line tools.
+      - name: Use preinstalled Android SDK
+        shell: bash
         run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          test -d "$SDK_ROOT" || { echo "Android SDK not found: $SDK_ROOT"; exit 1; }
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          SDK_MANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SDK_MANAGER" ]; then
+            SDK_MANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          fi
+          test -n "$SDK_MANAGER" && test -f "$SDK_MANAGER" || {
+            echo "Preinstalled sdkmanager not found"; exit 1;
+          }
+          echo "SDK_MANAGER=$SDK_MANAGER" >> "$GITHUB_ENV"
+          echo "Using SDK: $SDK_ROOT"
+          echo "Using sdkmanager: $SDK_MANAGER"
+
+      - name: Ensure Android 35 platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ] ||
+             [ ! -f "$ANDROID_HOME/build-tools/35.0.0/aapt2" ]; then
+            echo "Android 35 packages missing; installing only required packages"
+            yes | "$SDK_MANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+            "$SDK_MANAGER" --sdk_root="$ANDROID_HOME" --install               'platforms;android-35' 'build-tools;35.0.0'
+          else
+            echo "Android 35 packages already installed; skipping SDK download"
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          test -f "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+
+      - name: Prepare source
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p android-src
-          if [ -f Watch8_BinanceRisk_Compact_v2_OneUpload.zip ]; then
+          if [ -f Watch8_BinanceRisk_Compact_v2_FixedSDK_OneUpload.zip ]; then
+            unzip -q -o Watch8_BinanceRisk_Compact_v2_FixedSDK_OneUpload.zip -d android-src
+          elif [ -f Watch8_BinanceRisk_Compact_v2_OneUpload.zip ]; then
             unzip -q -o Watch8_BinanceRisk_Compact_v2_OneUpload.zip -d android-src
           else
             cp -R app tests build.gradle settings.gradle gradle.properties android-src/
@@ -50,13 +87,11 @@ jobs:
           test -f android-src/app/src/main/java/com/httools/wearrisk/MainActivity.java
           test -f android-src/app/src/main/java/com/httools/wearrisk/RiskMath.java
 
-      - name: Test unchanged risk calculations
+      - name: Test risk calculations
         working-directory: android-src
         run: |
           mkdir -p /tmp/risk-test-classes
-          javac -encoding UTF-8 -d /tmp/risk-test-classes \
-            app/src/main/java/com/httools/wearrisk/RiskMath.java \
-            tests/RiskMathRegression.java
+          javac -encoding UTF-8 -d /tmp/risk-test-classes             app/src/main/java/com/httools/wearrisk/RiskMath.java             tests/RiskMathRegression.java
           java -cp /tmp/risk-test-classes RiskMathRegression
 
       - name: Compile Wear OS APK
