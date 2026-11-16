@@ -1,0 +1,72 @@
+name: Build Watch8 Binance Risk Compact v2 APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Watch8_BinanceRisk_Compact_v2_OneUpload.zip'
+      - '.github/workflows/build-apk.yml'
+      - 'app/**'
+      - 'tests/**'
+      - 'settings.gradle'
+      - 'build.gradle'
+      - 'gradle.properties'
+
+jobs:
+  build-watch8:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK 35
+        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Prepare source (ZIP one-upload or extracted project)
+        run: |
+          mkdir -p android-src
+          if [ -f Watch8_BinanceRisk_Compact_v2_OneUpload.zip ]; then
+            unzip -q -o Watch8_BinanceRisk_Compact_v2_OneUpload.zip -d android-src
+          else
+            cp -R app tests build.gradle settings.gradle gradle.properties android-src/
+          fi
+          test -f android-src/settings.gradle
+          test -f android-src/app/src/main/java/com/httools/wearrisk/MainActivity.java
+          test -f android-src/app/src/main/java/com/httools/wearrisk/RiskMath.java
+
+      - name: Test unchanged risk calculations
+        working-directory: android-src
+        run: |
+          mkdir -p /tmp/risk-test-classes
+          javac -encoding UTF-8 -d /tmp/risk-test-classes \
+            app/src/main/java/com/httools/wearrisk/RiskMath.java \
+            tests/RiskMathRegression.java
+          java -cp /tmp/risk-test-classes RiskMathRegression
+
+      - name: Compile Wear OS APK
+        working-directory: android-src
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Watch8-BinanceRisk-Compact-v2-APK
+          path: android-src/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
